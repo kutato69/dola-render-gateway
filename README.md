@@ -159,7 +159,7 @@ Content-Type: application/json
 Authorization: <redacted>
 
 {
-  "model": "dola-image",
+  "model": "seedream-5.0-pro",
   "prompt": "Một chú mèo con lông xù màu vàng ngồi trên đồng cỏ hoa hướng dương lúc hoàng hôn, 4k cinematic",
   "ratio": "1:1",
   "style": "auto",
@@ -169,7 +169,7 @@ Authorization: <redacted>
 ```
 
 Tham số:
-- `model`: engine tạo ảnh — hiện tại `"dola-image"` (engine ảnh tích hợp của Dola, model do server Dola chọn).
+- `model`: `\"seedream-5.0-pro\"` (mặc định — Professional use · 4x credit usage) | `\"seedream-4.5\"` (Reliable quality for daily use). Hai model y hệt dropdown Model trên web Dola; gateway gửi đúng giá trị Dola dùng (`Seedream 5.0 Pro` / `Seedream 4.5`) trong `chat_ability` của request.
 - `ratio`: `1:1`, `3:4`, `4:3`, `9:16`, `16:9`, `21:9` (hoặc dùng `size` như `1024x1024` để tự suy ra ratio).
 - `style`: gợi ý phong cách dạng text (VD: `写实照片`, `anime`, `赛博朋克`); `"auto"` để Dola tự quyết.
 - `quality`: `"standard"` | `"hd"` (hd thêm gợi ý `画质：高清` vào prompt).
@@ -193,7 +193,7 @@ GET /v1/images/img_36adaf96ef
 {
   "id": "img_36adaf96ef",
   "status": "completed",
-  "model": "dola-image",
+  "model": "seedream-5.0-pro",
   "image_url": "https://...",
   "image_urls": ["https://...", "https://..."]
 }

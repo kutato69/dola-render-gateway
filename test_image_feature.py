@@ -8,6 +8,7 @@ Covers:
 """
 import ast
 import inspect
+import json
 import os
 import sqlite3
 import sys
@@ -56,7 +57,17 @@ c = dola_client.DolaClient("sessionid=abc; msToken=m; s_v_web_id=f")
 b1 = c._build_image_body("a cat", "1:1", "auto")
 t1 = b1["messages"][0]["content_block"][0]["content"]["text_block"]["text"]
 check("default quality sends no quality hint", "画质" not in t1)
-check("ability still type 16", b1["chat_ability"] == {"ability_type": 16, "ability_param": "{}"})
+check("message uses Generate image prefix", t1.startswith("Generate image: "))
+ca = b1["chat_ability"]
+check("ability type is 3 (web UI format)", ca["ability_type"] == 3)
+ap = json.loads(ca["ability_param"])
+check("ability_param carries default model", ap["ability_param"]["model"] == "Seedream 5.0 Pro")
+check("ability_param carries prompt", ap["ability_param"]["input_box_content"]["user_input_content"] == t1.replace("Generate image: ", "", 1))
+check("inner ability_type is 1", ap["ability_type"] == 1)
+
+b15 = c._build_image_body("a cat", "1:1", "auto", "standard", "Seedream 4.5")
+ap15 = json.loads(b15["chat_ability"]["ability_param"])
+check("model 4.5 threaded to ability_param", ap15["ability_param"]["model"] == "Seedream 4.5")
 
 b2 = c._build_image_body("a cat", "16:9", "写实照片", "hd")
 t2 = b2["messages"][0]["content_block"][0]["content"]["text_block"]["text"]
@@ -84,6 +95,7 @@ src = open(os.path.join(WORKDIR, "server.py"), encoding="utf-8").read()
 tree = ast.parse(src)
 wanted = {
     "IMAGE_MODELS", "IMAGE_RATIOS", "IMAGE_QUALITIES", "SIZE_TO_RATIO",
+    "DEFAULT_IMAGE_MODEL",
     "_resolve_ratio", "_normalize_image_model", "_normalize_image_ratio",
     "_normalize_image_quality",
 }
@@ -119,13 +131,14 @@ for node in ordered:
     exec(compile(ast.Module(body=[node], type_ignores=[]), "server.py", "exec"), ns)
 
 nm = ns["_normalize_image_model"]
-check("model default -> dola-image", nm(None) == "dola-image")
-check("model case/sep-insensitive", nm("DOLA_IMAGE") == "dola-image" and nm("Dola-Image") == "dola-image")
+check("model default -> seedream-5.0-pro", nm(None) == "seedream-5.0-pro")
+check("model case/sep-insensitive", nm("SEEDREAM_4.5") == "seedream-4.5" and nm("Seedream-4.5") == "seedream-4.5")
+check("dola_value mapping", ns["IMAGE_MODELS"]["seedream-4.5"]["dola_value"] == "Seedream 4.5")
 try:
-    nm("seedream-4")
+    nm("dola-image")
     check("unknown model raises 422", False)
 except HTTPException as e:
-    check("unknown model raises 422", e.status_code == 422 and "dola-image" in str(e.detail))
+    check("unknown model raises 422", e.status_code == 422 and "seedream-5.0-pro" in str(e.detail))
 
 nr = ns["_normalize_image_ratio"]
 check("ratio passthrough", nr(None, "16:9") == "16:9")
@@ -171,7 +184,7 @@ cols = [r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(tasks)")]
 for col in ("image_url", "image_urls", "image_style", "image_quality", "image_count"):
     check(f"migration added column {col}", col in cols)
 
-s.create("img_abc123", "dola-image", "a cat", "1:1", None,
+s.create("img_abc123", "seedream-5.0-pro", "a cat", "1:1", None,
          api_key_hash=None, api_key_name=None, daily_limit=0,
          concurrency_limit=0, max_pending=0)
 s.update("img_abc123", image_style="auto", image_quality="hd", image_count=2)
