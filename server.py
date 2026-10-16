@@ -240,16 +240,24 @@ def _resolve_ratio(size, ratio):
 
 
 # ===== Image API =====
-# Dola's chatbot image ability (ability_type=16) selects the image model
-# server-side; there is no verified client-side model switch today. The model
-# field is validated against this registry so new engines can be plugged in
-# later without changing the API shape.
+# Dola's image models, as exposed by the dola.com web UI image toolbar
+# (Model dropdown). The value sent on the wire is the display label itself,
+# in chat_ability (ability_type=3) -> nested ability_param.model —
+# verified from a captured /chat/completion request 2026-10-16.
 IMAGE_MODELS: dict[str, dict] = {
-    "dola-image": {
-        "label": "Dola Image",
-        "desc": "Dola built-in image engine (chatbot image ability)",
+    "seedream-5.0-pro": {
+        "label": "Seedream 5.0 Pro",
+        "desc": "Professional use · 4x credit usage",
+        "dola_value": "Seedream 5.0 Pro",
+    },
+    "seedream-4.5": {
+        "label": "Seedream 4.5",
+        "desc": "Reliable quality for daily use",
+        "dola_value": "Seedream 4.5",
     },
 }
+
+DEFAULT_IMAGE_MODEL = "seedream-5.0-pro"
 
 # Aspect ratios accepted by Dola's image generation (matches Dola web UI options)
 IMAGE_RATIOS = ("1:1", "3:4", "4:3", "9:16", "16:9", "21:9")
@@ -259,7 +267,7 @@ IMAGE_QUALITIES = ("standard", "hd")
 
 
 def _normalize_image_model(model: str | None) -> str:
-    key = (model or "dola-image").strip().lower().replace("_", "-")
+    key = (model or DEFAULT_IMAGE_MODEL).strip().lower().replace("_", "-")
     if key not in IMAGE_MODELS:
         raise HTTPException(
             422,
@@ -289,7 +297,7 @@ def _normalize_image_quality(quality: str | None) -> str:
 
 
 class ImageGenRequest(BaseModel):
-    model: str = "dola-image"
+    model: str = "seedream-5.0-pro"
     prompt: str = Field(..., min_length=1)
     size: str | None = None
     ratio: str | None = None
@@ -379,12 +387,13 @@ async def _run_image_task(task_id, model, prompt, ratio, style, quality, n, clie
         store.update(task_id, status="processing", started_at=time.time(),
                      last_poll_at=time.time())
         image_pool = _get_image_pool()
+        dola_model = IMAGE_MODELS[model]["dola_value"]
         urls: list[str] = []
         last_err: str | None = None
         for i in range(n):
             store.update(task_id, last_poll_at=time.time())
             try:
-                url = await image_pool.generate_image(prompt, ratio, style, quality)
+                url = await image_pool.generate_image(prompt, ratio, style, quality, dola_model)
             except Exception as e:
                 # Keep already-generated images: quota was spent on them.
                 last_err = (str(e).strip() or repr(e))[:500]
