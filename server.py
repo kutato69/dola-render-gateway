@@ -1,9 +1,11 @@
-"""Dola Pool: OpenAI-compatible Video API (FastAPI) and Admin Dashboard.
+"""Dola Pool: OpenAI-compatible Video & Image API (FastAPI) and Admin Dashboard.
 
 Endpoints (Asynchronous 2-stage):
-POST /v1/videos/generations -> Create task (status=queued)
-GET  /v1/videos/<id>         -> Query task status (queued/processing/completed/failed)
+POST /v1/videos/generations -> Create video task (status=queued)
+GET  /v1/videos/<id>         -> Query video task status (queued/processing/completed/failed)
 GET  /videos/<file>          -> Static video download server
+POST /v1/images/generations -> Create image task (status=queued)
+GET  /v1/images/<id>         -> Query image task status (queued/processing/completed/failed)
 
 Admin Dashboard: GET / -> web/index.html; Admin API /api/admin/*
 """
@@ -42,6 +44,7 @@ from PIL import Image
 import config
 from add_account import add_account_flow
 from browser_pool import AllAccountsLimitedError, AllAccountsQuotaBlockedError, BrowserPool
+from dola_client import CreditError, DolaPool
 from media import download_reference_images, validate_reference_urls
 from store import PendingTaskLimitExceeded, TaskQuotaExceeded, TaskStore
 
@@ -61,6 +64,35 @@ app.add_middleware(
 
 store = TaskStore(config.DB_PATH)
 pool = BrowserPool(max_concurrency=config.MAX_CONCURRENCY)
+
+# Image generation runs on the cookie-based DolaPool (chatbot image ability),
+# independent from the browser-automation video pool. cookies.txt is appended
+# by import_cookie.py on every account import, so the pool is rebuilt lazily
+# whenever the file changes.
+_image_pool: DolaPool | None = None
+_image_pool_mtime: float = 0.0
+
+
+def _get_image_pool() -> DolaPool:
+    """Returns a DolaPool built from the current cookies.txt (cached by mtime)."""
+    global _image_pool, _image_pool_mtime
+    try:
+        mtime = Path(config.COOKIES_FILE).stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    if _image_pool is None or mtime != _image_pool_mtime:
+        cookies: list[str] = []
+        try:
+            cookies = Path(config.COOKIES_FILE).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            pass
+        _image_pool = DolaPool(
+            cookies,
+            api_base="https://www.dola.com",
+            image_timeout=config.IMAGE_TIMEOUT,
+        )
+        _image_pool_mtime = mtime
+    return _image_pool
 
 app.mount("/videos", StaticFiles(directory=config.DOWNLOAD_DIR), name="videos")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -207,6 +239,99 @@ def _resolve_ratio(size, ratio):
     return ratio
 
 
+# ===== Image API =====
+# Dola's image models, as exposed by the dola.com web UI image toolbar
+# (Model dropdown). The value sent on the wire is the display label itself,
+# in chat_ability (ability_type=3) -> nested ability_param.model —
+# verified from a captured /chat/completion request 2026-10-16.
+IMAGE_MODELS: dict[str, dict] = {
+    "seedream-5.0-pro": {
+        "label": "Seedream 5.0 Pro",
+        "desc": "Professional use · 4x credit usage",
+        "dola_value": "Seedream 5.0 Pro",
+    },
+    "seedream-4.5": {
+        "label": "Seedream 4.5",
+        "desc": "Reliable quality for daily use",
+        "dola_value": "Seedream 4.5",
+    },
+}
+
+DEFAULT_IMAGE_MODEL = "seedream-5.0-pro"
+
+# Aspect ratios accepted by Dola's image generation (matches Dola web UI options)
+IMAGE_RATIOS = ("1:1", "3:4", "4:3", "9:16", "16:9", "21:9")
+
+# Quality presets; conveyed to Dola as a prompt hint (same mechanism as style/ratio)
+IMAGE_QUALITIES = ("standard", "hd")
+
+
+def _normalize_image_model(model: str | None) -> str:
+    key = (model or DEFAULT_IMAGE_MODEL).strip().lower().replace("_", "-")
+    if key not in IMAGE_MODELS:
+        raise HTTPException(
+            422,
+            f"Unsupported image model '{model}'. Supported models: {', '.join(sorted(IMAGE_MODELS))}",
+        )
+    return key
+
+
+def _normalize_image_ratio(size: str | None, ratio: str | None) -> str:
+    resolved = _resolve_ratio(size, ratio) or "1:1"
+    if resolved not in IMAGE_RATIOS:
+        raise HTTPException(
+            422,
+            f"Unsupported image ratio '{resolved}'. Supported ratios: {', '.join(IMAGE_RATIOS)}",
+        )
+    return resolved
+
+
+def _normalize_image_quality(quality: str | None) -> str:
+    key = (quality or "standard").strip().lower()
+    if key not in IMAGE_QUALITIES:
+        raise HTTPException(
+            422,
+            f"Unsupported image quality '{quality}'. Supported qualities: {', '.join(IMAGE_QUALITIES)}",
+        )
+    return key
+
+
+class ImageGenRequest(BaseModel):
+    model: str = "seedream-5.0-pro"
+    prompt: str = Field(..., min_length=1)
+    size: str | None = None
+    ratio: str | None = None
+    # Free-text style hint, e.g. "写实照片", "anime", "赛博朋克"; "auto" lets Dola decide.
+    style: str = "auto"
+    quality: str = "standard"
+    n: int = Field(1, ge=1, le=4)
+
+
+class ImageTaskResponse(BaseModel):
+    id: str
+    status: str
+    model: str | None = None
+    prompt: str | None = None
+    image_url: str | None = None
+    image_urls: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+def _image_task_response(row: dict) -> ImageTaskResponse:
+    try:
+        urls = json.loads(row.get("image_urls") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        urls = []
+    if not isinstance(urls, list):
+        urls = []
+    first = urls[0] if urls else (row.get("image_url") or None)
+    return ImageTaskResponse(
+        id=row["id"], status=row["status"], model=row["model"],
+        prompt=row["prompt"], image_url=first, image_urls=urls,
+        error=row["error"],
+    )
+
+
 async def _run_task(task_id, model, prompt, ratio, duration, reference_images, client):
     api_key_hash = client.get("api_key_hash")
     acquired = False
@@ -244,6 +369,56 @@ async def _run_task(task_id, model, prompt, ratio, duration, reference_images, c
     finally:
         if reference_root:
             shutil.rmtree(reference_root, ignore_errors=True)
+        if acquired:
+            await key_limiter.release(api_key_hash)
+
+
+async def _run_image_task(task_id, model, prompt, ratio, style, quality, n, client):
+    """Runs an image generation task via the cookie-based DolaPool.
+
+    Images are generated sequentially (one chatbot request each) so quota
+    consumption stays predictable and accounts rotate naturally on limits.
+    """
+    api_key_hash = client.get("api_key_hash")
+    acquired = False
+    try:
+        await key_limiter.acquire(api_key_hash, client.get("concurrency_limit", 0))
+        acquired = True
+        store.update(task_id, status="processing", started_at=time.time(),
+                     last_poll_at=time.time())
+        image_pool = _get_image_pool()
+        dola_model = IMAGE_MODELS[model]["dola_value"]
+        urls: list[str] = []
+        last_err: str | None = None
+        for i in range(n):
+            store.update(task_id, last_poll_at=time.time())
+            try:
+                url = await image_pool.generate_image(prompt, ratio, style, quality, dola_model)
+            except Exception as e:
+                # Keep already-generated images: quota was spent on them.
+                last_err = (str(e).strip() or repr(e))[:500]
+                break
+            if url:
+                urls.append(url)
+        if not urls:
+            raise Exception(last_err or "Image generation returned no image URL")
+        note = None
+        if len(urls) < n and last_err:
+            note = f"Partial result ({len(urls)}/{n} images): {last_err}"
+        store.update(
+            task_id, status="completed",
+            image_url=urls[0], image_urls=json.dumps(urls, ensure_ascii=False),
+            error=note,
+            last_poll_at=time.time(), finished_at=time.time(),
+        )
+    except CreditError as e:
+        store.update(task_id, status="failed", error=str(e)[:500],
+                     failure_code="429", finished_at=time.time())
+    except Exception as e:
+        err_msg = str(e).strip() or repr(e)
+        store.update(task_id, status="failed", error=err_msg[:500],
+                     finished_at=time.time())
+    finally:
         if acquired:
             await key_limiter.release(api_key_hash)
 
@@ -304,14 +479,25 @@ def _task_reference_images(raw) -> list[str]:
 async def resume_incomplete_tasks():
     """Recovers accepted sessions on startup and requeues pending tasks."""
     for row in store.recoverable_tasks():
+        if str(row.get("id", "")).startswith("img_"):
+            continue
         asyncio.create_task(_resume_task(row))
     for row in store.recoverable_queued_tasks():
+        if str(row.get("id", "")).startswith("img_"):
+            continue
         ratio = row.get("ratio")
         if ratio == "default":
             ratio = None
         asyncio.create_task(_run_task(
             row["id"], row["model"], row["prompt"], ratio, row["duration"],
             _task_reference_images(row.get("reference_images")), _task_client(row),
+        ))
+    # Requeue interrupted image tasks (queued/processing at shutdown).
+    for row in store.image_tasks_to_resume():
+        asyncio.create_task(_run_image_task(
+            row["id"], row["model"], row["prompt"], row.get("ratio") or "1:1",
+            row.get("image_style") or "auto", row.get("image_quality") or "standard",
+            int(row.get("image_count") or 1), _task_client(row),
         ))
 
 
@@ -456,6 +642,54 @@ async def get_video(task_id: str, authorization: str | None = Header(default=Non
         id=row["id"], status=row["status"], model=row["model"],
         prompt=row["prompt"], video_url=row["video_url"], error=row["error"],
     )
+
+
+@app.post("/v1/images/generations", response_model=ImageTaskResponse)
+async def create_image(req: ImageGenRequest, authorization: str | None = Header(default=None)):
+    client = _auth(authorization)
+    model = _normalize_image_model(req.model)
+    ratio = _normalize_image_ratio(req.size, req.ratio)
+    quality = _normalize_image_quality(req.quality)
+    style = (req.style or "auto").strip() or "auto"
+    n = max(1, min(req.n, config.IMAGE_MAX_COUNT))
+    image_pool = _get_image_pool()
+    if not image_pool.available:
+        raise HTTPException(
+            503,
+            "no account in pool: import a Dola cookie (cookies.txt) before generating images",
+        )
+    task_id = "img_" + uuid.uuid4().hex
+    try:
+        store.create(
+            task_id,
+            model,
+            req.prompt,
+            ratio,
+            None,
+            api_key_hash=client["api_key_hash"],
+            api_key_name=client["api_key_name"],
+            daily_limit=client["daily_limit"],
+            concurrency_limit=client["concurrency_limit"],
+            max_pending=config.MAX_PENDING_TASKS,
+        )
+    except TaskQuotaExceeded as exc:
+        raise HTTPException(429, str(exc)) from exc
+    except PendingTaskLimitExceeded as exc:
+        raise HTTPException(429, str(exc)) from exc
+    store.update(task_id, image_style=style, image_quality=quality, image_count=n)
+    asyncio.create_task(_run_image_task(
+        task_id, model, req.prompt, ratio, style, quality, n, client
+    ))
+    return ImageTaskResponse(id=task_id, status="queued", model=model, prompt=req.prompt)
+
+
+@app.get("/v1/images/{task_id}", response_model=ImageTaskResponse)
+async def get_image(task_id: str, authorization: str | None = Header(default=None)):
+    client = _auth(authorization)
+    row = store.get_for_client(task_id, client["api_key_hash"])
+    if not row:
+        raise HTTPException(404, "task not found")
+    return _image_task_response(row)
 
 
 @app.get("/health")

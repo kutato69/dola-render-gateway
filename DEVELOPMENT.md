@@ -7,7 +7,7 @@ Technical reference for the service architecture, profile coordination, and task
 ## 1. Core Architecture
 
 The system operates across three tiers:
-1. **API Tier (`server.py`)**: FastAPI application exposing standard OpenAI video endpoints (`/v1/videos/generations`, `/v1/videos/<id>`) and web dashboard routes (`/web`, `/api/admin/*`).
+1. **API Tier (`server.py`)**: FastAPI application exposing standard OpenAI video endpoints (`/v1/videos/generations`, `/v1/videos/<id>`), image endpoints (`/v1/images/generations`, `/v1/images/<id>`), and web dashboard routes (`/web`, `/api/admin/*`). Image tasks (`img_*`) run on the cookie-based `DolaPool` (`dola_client.py`, chatbot image ability `ability_type=16`, accounts from `cookies.txt`) — no browser automation; video tasks keep using `BrowserPool` + UI automation.
 2. **Pool Management Tier (`browser_pool.py`)**: Manages persistent browser profiles in `accounts/`, controlling task concurrency, account locking, and daily quota rotations.
 3. **Execution Tier (`video_worker_ui.py`, `video_worker.py`)**:
    - **UI Automation Mode**: Automates browser interactions, authenticates via persistent browser session, injects prompts, and handles verification challenges.

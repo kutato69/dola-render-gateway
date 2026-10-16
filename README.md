@@ -152,7 +152,56 @@ GET /v1/videos/video_36adaf96ef
 }
 ```
 
-### 3. Trích Xuất Video Gốc Không Watermark Từ Link Chat
+### 3. Khởi Tạo Tác Vụ Sinh Ảnh
+```http
+POST /v1/images/generations
+Content-Type: application/json
+Authorization: <redacted>
+
+{
+  "model": "seedream-5.0-pro",
+  "prompt": "Một chú mèo con lông xù màu vàng ngồi trên đồng cỏ hoa hướng dương lúc hoàng hôn, 4k cinematic",
+  "ratio": "1:1",
+  "style": "auto",
+  "quality": "standard",
+  "n": 1
+}
+```
+
+Tham số:
+- `model`: `\"seedream-5.0-pro\"` (mặc định — Professional use · 4x credit usage) | `\"seedream-4.5\"` (Reliable quality for daily use). Hai model y hệt dropdown Model trên web Dola; gateway gửi đúng giá trị Dola dùng (`Seedream 5.0 Pro` / `Seedream 4.5`) trong `chat_ability` của request.
+- `ratio`: `1:1`, `3:4`, `4:3`, `9:16`, `16:9`, `21:9` (hoặc dùng `size` như `1024x1024` để tự suy ra ratio).
+- `style`: gợi ý phong cách dạng text (VD: `写实照片`, `anime`, `赛博朋克`); `"auto"` để Dola tự quyết.
+- `quality`: `"standard"` | `"hd"` (hd thêm gợi ý `画质：高清` vào prompt).
+- `n`: số ảnh mỗi task (1–4, mặc định 1).
+
+**Phản hồi (Response):**
+```json
+{
+  "id": "img_36adaf96ef",
+  "status": "queued"
+}
+```
+
+### 4. Truy Vấn Tiến Độ & Nhận Link Ảnh
+```http
+GET /v1/images/img_36adaf96ef
+```
+
+**Phản hồi khi hoàn thành:**
+```json
+{
+  "id": "img_36adaf96ef",
+  "status": "completed",
+  "model": "seedream-5.0-pro",
+  "image_url": "https://...",
+  "image_urls": ["https://...", "https://..."]
+}
+```
+
+> Lưu ý: sinh ảnh chạy trên cookie pool (`cookies.txt`, dùng chung tài khoản đã import) qua chatbot image ability của Dola — không cần browser automation như luồng video.
+
+### 5. Trích Xuất Video Gốc Không Watermark Từ Link Chat
 ```http
 POST /api/extract_unwatermarked
 Content-Type: application/json

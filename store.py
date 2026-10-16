@@ -69,6 +69,12 @@ class TaskStore:
                 ("started_at", "REAL"),
                 ("finished_at", "REAL"),
                 ("client_concurrency_limit", "INTEGER DEFAULT 0"),
+                # Image generation task columns (img_* tasks)
+                ("image_url", "TEXT"),
+                ("image_urls", "TEXT"),
+                ("image_style", "TEXT"),
+                ("image_quality", "TEXT"),
+                ("image_count", "INTEGER DEFAULT 1"),
             ):
                 try:
                     self._conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} {definition}")
@@ -246,6 +252,15 @@ class TaskStore:
             rows = self._conn.execute(
                 "SELECT * FROM tasks WHERE status='queued' "
                 "AND conversation_id IS NULL ORDER BY created_at"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def image_tasks_to_resume(self) -> list:
+        """Image tasks (img_*) left queued/processing at shutdown; safe to re-run."""
+        with _LOCK:
+            rows = self._conn.execute(
+                "SELECT * FROM tasks WHERE id LIKE 'img\\_%' ESCAPE '\\' "
+                "AND status IN ('queued','processing') ORDER BY created_at"
             ).fetchall()
         return [dict(r) for r in rows]
 

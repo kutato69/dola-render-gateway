@@ -600,9 +600,17 @@ class DolaClient:
 
     # ===== Text-to-Image =====
 
-    async def generate_image(self, prompt: str, ratio: str = "1:1", style: str = "auto") -> str:
-        """Text-to-Image generation, returns image URL."""
-        body = self._build_image_body(prompt, ratio, style)
+    async def generate_image(self, prompt: str, ratio: str = "1:1", style: str = "auto",
+                             quality: str = "standard",
+                             model: str = "Seedream 5.0 Pro") -> str:
+        """Text-to-Image generation, returns image URL.
+
+        model is the Dola image-model label as sent by the web UI, e.g.
+        "Seedream 5.0 Pro" or "Seedream 4.5" (verified from dola.com
+        /chat/completion wire format 2026-10-16: chat_ability ability_type=3
+        with nested ability_param carrying variables.model).
+        """
+        body = self._build_image_body(prompt, ratio, style, quality, model)
         async with aiohttp.ClientSession(trust_env=True) as session:
             resp = await self._request_chat_completion(session, body, timeout=60)
             async with resp:
@@ -626,8 +634,26 @@ class DolaClient:
             return await self._poll_image(conv_id)
         raise Exception("Image generation: failed to acquire conversation_id")
 
-    def _build_image_body(self, prompt: str, ratio: str, style: str) -> dict:
+    def _build_image_body(self, prompt: str, ratio: str, style: str,
+                            quality: str = "standard",
+                            model: str = "Seedream 5.0 Pro") -> dict:
         now_ms = int(time.time() * 1000)
+        # Quality is conveyed as a prompt hint, same mechanism as style/ratio.
+        quality_hint = "\n画质：高清" if quality == "hd" else ""
+        # Mirror dola.com web UI wire format (captured 2026-10-16):
+        # message text is "Generate image: <prompt>", and the model choice
+        # goes in chat_ability (ability_type=3) -> nested ability_param.model.
+        full_prompt = f"{prompt}\n风格：{style}\n比例：{ratio}{quality_hint}"
+        ability_param = json.dumps({
+            "ability_param": {
+                "model": model,
+                "input_box_content": {
+                    "user_input_content": full_prompt,
+                    "reply_message_format": "Generate image: %s",
+                },
+            },
+            "ability_type": 1,
+        })
         return {
             "client_meta": {
                 "local_conversation_id": f"local_{now_ms}",
@@ -642,7 +668,7 @@ class DolaClient:
                     "block_type": 10000,
                     "content": {
                         "text_block": {
-                            "text": f"帮我生成图片：{prompt}\n风格：{style}\n比例：{ratio}",
+                            "text": f"Generate image: {full_prompt}",
                             "icon_url": "", "icon_url_dark": "", "summary": "",
                         },
                         "pc_event_block": "",
@@ -663,7 +689,7 @@ class DolaClient:
                 "sse_recv_event_options": {"support_chunk_delta": True},
                 "is_old_user": False,
             },
-            "chat_ability": {"ability_type": 16, "ability_param": "{}"},
+            "chat_ability": {"ability_type": 3, "ability_param": ability_param},
             "user_context": [],
             "ext": {
                 "fp": self.info["fp"],
@@ -883,7 +909,12 @@ class DolaPool:
     def __init__(self, cookies: list, api_base: str = "https://www.dola.com",
                  video_timeout: int = 300, image_timeout: int = 120, max_retry: int = 2):
         self.clients = []
+        seen = set()
         for c in cookies:
+            c = (c or "").strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
             try:
                 client = create_client(c, api_base)
                 if client.is_valid:
@@ -941,8 +972,9 @@ class DolaPool:
     async def vision(self, image_input, prompt):
         return await self.run_with_pool("vision", image_input, prompt)
 
-    async def generate_image(self, prompt, ratio="1:1", style="auto"):
-        return await self.run_with_pool("generate_image", prompt, ratio, style)
+    async def generate_image(self, prompt, ratio="1:1", style="auto", quality="standard",
+                             model="Seedream 5.0 Pro"):
+        return await self.run_with_pool("generate_image", prompt, ratio, style, quality, model)
 
     async def generate_video(self, prompt, ratio="9:16", duration=5):
         return await self.run_with_pool(
@@ -1264,12 +1296,14 @@ class DoubaoCNClient:
                 events = await self._read_sse(resp)
         return self._extract_cn_text(events)
 
-    async def generate_image(self, prompt: str, ratio: str = "1:1", style: str = "auto") -> str:
+    async def generate_image(self, prompt: str, ratio: str = "1:1", style: str = "auto",
+                             quality: str = "standard") -> str:
         """Domestic text-to-image generation."""
         # Domestic text-to-image uses ability_type=16
+        quality_hint = "\n画质：高清" if quality == "hd" else ""
         body = {
             "messages": [{
-                "content": json.dumps({"text": f"帮我生成图片：{prompt}\n风格：{style}\n比例：{ratio}"}),
+                "content": json.dumps({"text": f"帮我生成图片：{prompt}\n风格：{style}\n比例：{ratio}{quality_hint}"}),
                 "content_type": 2001,
                 "attachments": [],
                 "references": [],

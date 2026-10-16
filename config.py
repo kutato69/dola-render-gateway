@@ -35,6 +35,12 @@ MAX_PENDING_TASKS = int(os.getenv("DOLA_MAX_PENDING_TASKS", "100"))
 # Video generation timeout in seconds
 VIDEO_TIMEOUT = int(os.getenv("DOLA_VIDEO_TIMEOUT", "300"))
 
+# Image generation timeout in seconds (chatbot SSE + poll window)
+IMAGE_TIMEOUT = int(os.getenv("DOLA_IMAGE_TIMEOUT", "180"))
+
+# Max images per image-generation request (Dola web UI allows up to 4)
+IMAGE_MAX_COUNT = int(os.getenv("DOLA_IMAGE_MAX_COUNT", "4"))
+
 # SQLite database path
 DB_PATH = os.getenv("DOLA_DB_PATH", "tasks.db")
 
