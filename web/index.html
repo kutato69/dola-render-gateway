@@ -999,14 +999,18 @@ tr:hover td { background: var(--color-paper-hover); }
         <div class="form-group">
           <div class="form-label"><span>Mô hình tạo ảnh</span></div>
           <div class="pill-group" id="imgModelPillGroup">
-            <div class="pill-btn active" data-val="dola-image" onclick="selectImageModelPill('dola-image')">
-              <span>🎨 Dola Image</span>
-              <span class="pill-meta">Engine tạo ảnh tích hợp của Dola</span>
+            <div class="pill-btn active" data-val="seedream-5.0-pro" onclick="selectImageModelPill('seedream-5.0-pro')">
+              <span>✨ Seedream 5.0 Pro</span>
+              <span class="pill-meta">Professional use · 4x credit usage</span>
+            </div>
+            <div class="pill-btn" data-val="seedream-4.5" onclick="selectImageModelPill('seedream-4.5')">
+              <span>🎨 Seedream 4.5</span>
+              <span class="pill-meta">Reliable quality for daily use</span>
             </div>
           </div>
-          <input type="hidden" id="img_model" value="dola-image">
+          <input type="hidden" id="img_model" value="seedream-5.0-pro">
           <div style="margin-top:7px;font-size:12px;color:var(--color-ink-3);line-height:1.5">
-            💡 Dola chọn model ảnh ở phía server (qua chatbot image ability) — hiện tại gateway verify được 1 engine này. Khung model đã chừa sẵn để bổ sung khi reverse thêm được.
+            💡 Hai model y hệt dropdown Model trên web Dola — gateway gửi đúng giá trị Dola dùng (<span style="font-family:monospace">Seedream 5.0 Pro</span> / <span style="font-family:monospace">Seedream 4.5</span>).
           </div>
         </div>
 
